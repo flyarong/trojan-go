@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"io"
 	"math/rand"
 	"sync"
 	"time"
@@ -14,36 +15,45 @@ import (
 	"github.com/xtaci/smux"
 )
 
-type muxID uint32
+type MuxID uint32
 
-func generateMuxID() muxID {
-	return muxID(rand.Uint32())
+func generateMuxID() MuxID {
+	return MuxID(rand.Uint32())
 }
 
 type muxClientInfo struct {
-	id             muxID
+	id             MuxID
 	client         *smux.Session
 	lastActiveTime time.Time
 }
 
-type muxPoolManager struct {
+type MuxManager struct {
+	TransportManager
+
 	sync.Mutex
-	muxPool map[muxID]*muxClientInfo
-	config  *conf.GlobalConfig
-	ctx     context.Context
+	muxPool   map[MuxID]*muxClientInfo
+	config    *conf.GlobalConfig
+	ctx       context.Context
+	transport *TLSManager
 }
 
-func (m *muxPoolManager) newMuxClient() (*muxClientInfo, error) {
+func (m *MuxManager) newMuxClient() (*muxClientInfo, error) {
 	id := generateMuxID()
 	if _, found := m.muxPool[id]; found {
 		return nil, common.NewError("duplicated id")
 	}
 	req := &protocol.Request{
-		Command:     protocol.Mux,
-		DomainName:  []byte("MUX_CONN"),
-		AddressType: protocol.DomainName,
+		Command: protocol.Mux,
+		Address: &common.Address{
+			DomainName:  "MUX_CONN",
+			AddressType: common.DomainName,
+		},
 	}
-	conn, err := trojan.NewOutboundConnSession(req, nil, m.config)
+	rwc, err := m.transport.DialToServer()
+	if err != nil {
+		return nil, common.NewError("failed to dail to remote server").Base(err)
+	}
+	conn, err := trojan.NewOutboundConnSession(req, rwc, m.config)
 	if err != nil {
 		log.Error(common.NewError("failed to dial tls tunnel").Base(err))
 		return nil, err
@@ -59,7 +69,7 @@ func (m *muxPoolManager) newMuxClient() (*muxClientInfo, error) {
 	}, nil
 }
 
-func (m *muxPoolManager) pickMuxClient() (*muxClientInfo, error) {
+func (m *MuxManager) pickMuxClient() (*muxClientInfo, error) {
 	m.Lock()
 	defer m.Unlock()
 
@@ -84,10 +94,10 @@ func (m *muxPoolManager) pickMuxClient() (*muxClientInfo, error) {
 	return info, nil
 }
 
-func (m *muxPoolManager) OpenMuxConn() (*smux.Stream, *muxClientInfo, error) {
+func (m *MuxManager) DialToServer() (io.ReadWriteCloser, error) {
 	info, err := m.pickMuxClient()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	stream, err := info.client.OpenStream()
 	if err != nil {
@@ -95,14 +105,15 @@ func (m *muxPoolManager) OpenMuxConn() (*smux.Stream, *muxClientInfo, error) {
 		defer m.Unlock()
 		delete(m.muxPool, info.id)
 		info.client.Close()
-		log.Info("somthing wrong with mux", info.id, ", closing")
-		return nil, nil, err
+		log.Info("somthing wrong with mux client", info.id, ", closing")
+		return nil, err
 	}
+	log.Debug("new mux conn established, client", info.id)
 	info.lastActiveTime = time.Now()
-	return stream, info, nil
+	return stream, nil
 }
 
-func (m *muxPoolManager) checkAndCloseIdleMuxClient() {
+func (m *MuxManager) checkAndCloseIdleMuxClient() {
 	var muxIdleDuration, checkDuration time.Duration
 	if m.config.Mux.IdleTimeout <= 0 {
 		muxIdleDuration = 0
@@ -135,7 +146,7 @@ func (m *muxPoolManager) checkAndCloseIdleMuxClient() {
 			m.Lock()
 			for id, info := range m.muxPool {
 				info.client.Close()
-				log.Info("mux", id, "closed")
+				log.Info("mux client", id, "closed")
 			}
 			m.Unlock()
 			return
@@ -143,12 +154,13 @@ func (m *muxPoolManager) checkAndCloseIdleMuxClient() {
 	}
 }
 
-func NewMuxPoolManager(ctx context.Context, config *conf.GlobalConfig) (*muxPoolManager, error) {
-	m := &muxPoolManager{
-		ctx:     ctx,
-		config:  config,
-		muxPool: make(map[muxID]*muxClientInfo),
+func NewMuxPoolManager(ctx context.Context, config *conf.GlobalConfig) *MuxManager {
+	m := &MuxManager{
+		ctx:       ctx,
+		config:    config,
+		muxPool:   make(map[MuxID]*muxClientInfo),
+		transport: NewTLSManager(config),
 	}
 	go m.checkAndCloseIdleMuxClient()
-	return m, nil
+	return m
 }

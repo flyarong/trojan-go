@@ -1,40 +1,39 @@
 package conf
 
 import (
+	"crypto/aes"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
-	"fmt"
 	"io/ioutil"
 	"net"
+	"net/http"
 	"strings"
 
 	"github.com/p4gefau1t/trojan-go/common"
 	"github.com/p4gefau1t/trojan-go/log"
+	"golang.org/x/crypto/pbkdf2"
 )
-
-func convertToAddr(preferV4 bool, host string, port int) (*net.TCPAddr, error) {
-	ip := net.ParseIP(host)
-	if ip != nil {
-		return &net.TCPAddr{
-			IP:   ip,
-			Port: port,
-		}, nil
-	}
-	if preferV4 {
-		return net.ResolveTCPAddr("tcp4", fmt.Sprintf("%s:%d", host, port))
-	}
-	return net.ResolveTCPAddr("tcp", fmt.Sprintf("%s:%d", host, port))
-}
 
 func loadCommonConfig(config *GlobalConfig) error {
 	//log level
 	log.SetLogLevel(log.LogLevel(config.LogLevel))
 
+	//buffer size, 4KiB to 4MB
+	if config.BufferSize < 4 || config.BufferSize > 4096 {
+		return common.NewError("invalid buffer size, 4 < buffer_size < 4096")
+	}
+
+	config.BufferSize *= 1024
+
 	//password settings
 	if len(config.Passwords) == 0 {
-		return common.NewError("no password found")
+		if config.RunType == Client {
+			return common.NewError("no password found")
+		}
+		log.Warn("password is not specified in config file")
 	}
 	config.Hash = make(map[string]string)
 	for _, password := range config.Passwords {
@@ -42,26 +41,17 @@ func loadCommonConfig(config *GlobalConfig) error {
 	}
 
 	//address settings
-	localAddr, err := convertToAddr(config.TCP.PreferIPV4, config.LocalHost, config.LocalPort)
-	if err != nil {
-		return common.NewError("invalid local address").Base(err)
-	}
-	config.LocalAddr = localAddr
-	config.LocalIP = localAddr.IP
-
-	remoteAddr, err := convertToAddr(config.TCP.PreferIPV4, config.RemoteHost, config.RemotePort)
-	if err != nil {
-		return common.NewError("invalid remote address").Base(err)
-	}
-	config.RemoteAddr = remoteAddr
-	config.RemoteIP = remoteAddr.IP
+	config.LocalAddress = common.NewAddress(config.LocalHost, config.LocalPort, "tcp")
+	config.RemoteAddress = common.NewAddress(config.RemoteHost, config.RemotePort, "tcp")
+	config.TargetAddress = common.NewAddress(config.TargetHost, config.TargetPort, "tcp")
 
 	if config.TLS.FallbackPort != 0 {
-		fallbackAddr, err := convertToAddr(config.TCP.PreferIPV4, config.RemoteHost, config.TLS.FallbackPort)
-		if err != nil {
-			return common.NewError("invalid tls fallback address").Base(err)
-		}
-		config.TLS.FallbackAddr = fallbackAddr
+		config.TLS.FallbackAddress = common.NewAddress(config.RemoteHost, config.TLS.FallbackPort, "tcp")
+	}
+
+	//api settings
+	if config.API.Enabled {
+		config.API.APIAddress = common.NewAddress(config.API.APIHost, config.API.APIPort, "tcp")
 	}
 
 	//tls settings
@@ -97,6 +87,8 @@ func loadCommonConfig(config *GlobalConfig) error {
 			log.Warn(list[0 : len(list)-1])
 			config.TLS.CipherSuites = nil
 		}
+	} else {
+		config.TLS.CipherSuites = nil
 	}
 
 	//websocket settings
@@ -108,12 +100,22 @@ func loadCommonConfig(config *GlobalConfig) error {
 		if config.Websocket.Path[0] != '/' {
 			return common.NewError("websocket path must start with \"/\"")
 		}
-		if config.RunType == Client && config.Websocket.HostName == "" {
-			log.Warn("Client websocket host_name is unspecified, using remote_addr \"", config.RemoteHost, "\" as host_name")
-			config.Websocket.HostName = config.RemoteHost
-			if ip := net.ParseIP(config.RemoteHost); ip != nil && ip.To4() == nil { //ipv6 address
-				config.Websocket.HostName = "[" + config.RemoteHost + "]"
+		if config.Websocket.HostName == "" {
+			if config.RunType == Client {
+				log.Warn("client websocket hostname is unspecified, using remote_addr \"", config.RemoteHost, "\" as host_name")
+				config.Websocket.HostName = config.RemoteHost
+				if ip := net.ParseIP(config.RemoteHost); ip != nil && ip.To4() == nil { //ipv6 address
+					config.Websocket.HostName = "[" + config.RemoteHost + "]"
+				}
+			} else if config.RunType == Server {
+				return common.NewError("server websocket hostname is required")
 			}
+		}
+		if config.Websocket.ObfuscationPassword != "" {
+			log.Info("websocket obfs enabled")
+			password := []byte(config.Websocket.ObfuscationPassword)
+			salt := []byte{48, 149, 6, 18, 13, 193, 247, 116, 197, 135, 236, 175, 190, 209, 146, 48}
+			config.Websocket.ObfuscationKey = pbkdf2.Key(password, salt, 32, aes.BlockSize, sha256.New)
 		}
 	}
 	return nil
@@ -129,11 +131,11 @@ func loadClientConfig(config *GlobalConfig) error {
 
 	for _, s := range config.Router.Block {
 		if strings.HasPrefix(s, "geoip:") {
-			config.Router.BlockIPCode = append(config.Router.BlockIPCode, s[len("geoip:"):len(s)])
+			config.Router.BlockIPCode = append(config.Router.BlockIPCode, s[len("geoip:"):])
 			continue
 		}
 		if strings.HasPrefix(s, "geosite:") {
-			config.Router.BlockSiteCode = append(config.Router.BlockSiteCode, s[len("geosite:"):len(s)])
+			config.Router.BlockSiteCode = append(config.Router.BlockSiteCode, s[len("geosite:"):])
 			continue
 		}
 		data, err := ioutil.ReadFile(s)
@@ -146,11 +148,11 @@ func loadClientConfig(config *GlobalConfig) error {
 
 	for _, s := range config.Router.Bypass {
 		if strings.HasPrefix(s, "geoip:") {
-			config.Router.BypassIPCode = append(config.Router.BypassIPCode, s[len("geoip:"):len(s)])
+			config.Router.BypassIPCode = append(config.Router.BypassIPCode, s[len("geoip:"):])
 			continue
 		}
 		if strings.HasPrefix(s, "geosite:") {
-			config.Router.BypassSiteCode = append(config.Router.BypassSiteCode, s[len("geosite:"):len(s)])
+			config.Router.BypassSiteCode = append(config.Router.BypassSiteCode, s[len("geosite:"):])
 			continue
 		}
 		data, err := ioutil.ReadFile(s)
@@ -163,11 +165,11 @@ func loadClientConfig(config *GlobalConfig) error {
 
 	for _, s := range config.Router.Proxy {
 		if strings.HasPrefix(s, "geoip:") {
-			config.Router.ProxyIPCode = append(config.Router.ProxyIPCode, s[len("geoip:"):len(s)])
+			config.Router.ProxyIPCode = append(config.Router.ProxyIPCode, s[len("geoip:"):])
 			continue
 		}
 		if strings.HasPrefix(s, "geosite:") {
-			config.Router.ProxySiteCode = append(config.Router.ProxySiteCode, s[len("geosite:"):len(s)])
+			config.Router.ProxySiteCode = append(config.Router.ProxySiteCode, s[len("geosite:"):])
 			continue
 		}
 		data, err := ioutil.ReadFile(s)
@@ -231,6 +233,17 @@ func loadClientConfig(config *GlobalConfig) error {
 }
 
 func loadServerConfig(config *GlobalConfig) error {
+
+	//check web server
+	resp, err := http.Get("http://" + config.RemoteAddress.String())
+	if err != nil {
+		return common.NewError(config.RemoteAddress.String() + " is not a valid web server").Base(err)
+	}
+	buf := [128]byte{}
+	_, err = resp.Body.Read(buf[:])
+	log.Debug("body:\n" + string(buf[:]))
+	resp.Body.Close()
+
 	if config.TLS.KeyPassword != "" {
 		keyFile, err := ioutil.ReadFile(config.TLS.KeyPath)
 		if err != nil {
@@ -278,15 +291,21 @@ func ParseJSON(data []byte) (*GlobalConfig, error) {
 	config := &GlobalConfig{}
 
 	//default settings
+	config.LogLevel = 1
+	config.BufferSize = 512
 	config.TLS.Verify = true
 	config.TLS.VerifyHostname = true
 	config.TLS.SessionTicket = true
+	config.TLS.ReuseSession = true
 	config.Mux.IdleTimeout = 60
 	config.Mux.Concurrency = 8
 	config.MySQL.CheckRate = 60
 	config.Router.DefaultPolicy = "proxy"
 	config.Router.GeoIPFilename = common.GetProgramDir() + "/geoip.dat"
 	config.Router.GeoSiteFilename = common.GetProgramDir() + "/geosite.dat"
+	config.Websocket.DoubleTLS = true
+	config.Websocket.DoubleTLSVerify = true
+	config.Websocket.ObfuscationPassword = ""
 
 	err := json.Unmarshal(data, config)
 	if err != nil {
@@ -298,7 +317,7 @@ func ParseJSON(data []byte) (*GlobalConfig, error) {
 	}
 
 	switch config.RunType {
-	case Client, NAT:
+	case Client, NAT, Forward:
 		if err := loadClientConfig(config); err != nil {
 			return nil, err
 		}
@@ -306,7 +325,7 @@ func ParseJSON(data []byte) (*GlobalConfig, error) {
 		if err := loadServerConfig(config); err != nil {
 			return nil, err
 		}
-	case Forward:
+	case Relay:
 	default:
 		return nil, common.NewError("invalid run type:" + string(config.RunType))
 	}

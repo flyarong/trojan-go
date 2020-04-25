@@ -1,6 +1,6 @@
 // +build linux
 
-package nat
+package tproxy
 
 import (
 	"context"
@@ -15,55 +15,57 @@ import (
 	"github.com/p4gefau1t/trojan-go/protocol"
 )
 
-type NATInboundConnSession struct {
+type TProxyInboundConnSession struct {
 	protocol.ConnSession
 	reqeust *protocol.Request
 	conn    net.Conn
 }
 
-func (i *NATInboundConnSession) Read(p []byte) (int, error) {
+func (i *TProxyInboundConnSession) Read(p []byte) (int, error) {
 	return i.conn.Read(p)
 }
 
-func (i *NATInboundConnSession) Write(p []byte) (int, error) {
+func (i *TProxyInboundConnSession) Write(p []byte) (int, error) {
 	return i.conn.Write(p)
 }
 
-func (i *NATInboundConnSession) Close() error {
+func (i *TProxyInboundConnSession) Close() error {
 	return i.conn.Close()
 }
 
-func (i *NATInboundConnSession) GetRequest() *protocol.Request {
+func (i *TProxyInboundConnSession) GetRequest() *protocol.Request {
 	return i.reqeust
 }
 
-func (i *NATInboundConnSession) parseRequest() error {
+func (i *TProxyInboundConnSession) parseRequest() error {
 	addr, err := getOriginalTCPDest(i.conn.(*net.TCPConn))
 	if err != nil {
 		return common.NewError("failed to get original dst").Base(err)
 	}
 	req := &protocol.Request{
-		IP:      addr.IP,
-		Port:    addr.Port,
+		Address: &common.Address{
+			IP:   addr.IP,
+			Port: addr.Port,
+		},
 		Command: protocol.Connect,
 	}
 	if addr.IP.To4() != nil {
-		req.AddressType = protocol.IPv4
+		req.AddressType = common.IPv4
 	} else {
-		req.AddressType = protocol.IPv6
+		req.AddressType = common.IPv6
 	}
 	i.reqeust = req
 	return nil
 }
 
-func NewInboundConnSession(conn net.Conn) (protocol.ConnSession, error) {
-	i := &NATInboundConnSession{
+func NewInboundConnSession(conn net.Conn) (protocol.ConnSession, *protocol.Request, error) {
+	i := &TProxyInboundConnSession{
 		conn: conn,
 	}
 	if err := i.parseRequest(); err != nil {
-		return nil, common.NewError("failed to parse request").Base(err)
+		return nil, nil, common.NewError("failed to parse request").Base(err)
 	}
-	return i, nil
+	return i, i.reqeust, nil
 }
 
 type udpSession struct {
@@ -133,16 +135,18 @@ func (i *NATInboundPacketSession) ReadPacket() (*protocol.Request, []byte, error
 		expire: time.Now().Add(protocol.UDPTimeout),
 	}
 	i.tableMutex.Unlock()
-	log.Debug("tproxy UDP packet from", src, "to", dst)
+	log.Debug("tproxy udp packet from", src, "to", dst)
 	req := &protocol.Request{
-		IP:          dst.IP,
-		Port:        dst.Port,
-		NetworkType: "udp",
+		Address: &common.Address{
+			IP:          dst.IP,
+			Port:        dst.Port,
+			NetworkType: "udp",
+		},
 	}
 	if dst.IP.To4() != nil {
-		req.AddressType = protocol.IPv4
+		req.AddressType = common.IPv4
 	} else {
-		req.AddressType = protocol.IPv6
+		req.AddressType = common.IPv6
 	}
 	return req, buf[0:n], nil
 }
@@ -152,16 +156,20 @@ func (i *NATInboundPacketSession) Close() error {
 	return nil
 }
 
-func NewInboundPacketSession(config *conf.GlobalConfig) (protocol.PacketSession, error) {
+func NewInboundPacketSession(ctx context.Context, config *conf.GlobalConfig) (protocol.PacketSession, error) {
+	localIP, err := config.LocalAddress.ResolveIP(false)
+	if err != nil {
+		return nil, err
+	}
 	addr := &net.UDPAddr{
-		IP:   config.LocalIP,
-		Port: int(config.LocalPort),
+		IP:   localIP,
+		Port: int(config.LocalAddress.Port),
 	}
 	conn, err := tproxy.ListenUDP("udp", addr)
 	if err != nil {
-		return nil, common.NewError("failed to listen UDP addr").Base(err)
+		return nil, common.NewError("failed to listen udp addr").Base(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	i := &NATInboundPacketSession{
 		conn:         conn,
 		sessionTable: make(map[string]*udpSession, 1024),

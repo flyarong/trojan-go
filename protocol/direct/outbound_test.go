@@ -1,6 +1,7 @@
 package direct
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"net"
@@ -13,13 +14,15 @@ import (
 
 func TestDirectOutbound(t *testing.T) {
 	for i := 0; i < 10; i++ {
-		go test.RunEchoUDPServer(6543 + i)
+		go test.RunEchoUDPServer(context.Background())
 	}
-	outbound, _ := NewOutboundPacketSession()
+	outbound, _ := NewOutboundPacketSession(context.Background())
 	for i := 0; i < 30; i++ {
 		req := &protocol.Request{
-			IP:   net.ParseIP("127.0.0.1"),
-			Port: 6543,
+			Address: &common.Address{
+				IP:   net.ParseIP("127.0.0.1"),
+				Port: 6543,
+			},
 		}
 		req.Port += rand.Intn(10)
 		packet := []byte(fmt.Sprintf("hello motherfucker %d, port=%d", i, req.Port))

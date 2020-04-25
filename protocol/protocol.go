@@ -13,7 +13,6 @@ import (
 )
 
 type Command byte
-type AddressType byte
 
 const (
 	Connect   Command = 1
@@ -23,45 +22,24 @@ const (
 )
 
 const (
-	IPv4       AddressType = 1
-	DomainName AddressType = 3
-	IPv6       AddressType = 4
-)
-
-const (
 	MaxUDPPacketSize = 1024 * 4
 	UDPTimeout       = time.Second * 5
 	TCPTimeout       = time.Second * 5
 )
 
 type Request struct {
-	DomainName  []byte
-	Port        int
-	IP          net.IP
-	AddressType AddressType
-	NetworkType string
-	Command     Command
 	net.Addr
+
+	*common.Address
+	Command Command
 }
 
 func (r *Request) Network() string {
-	return r.NetworkType
+	return r.Address.Network()
 }
 
 func (r *Request) String() string {
-	if r.DomainName == nil || len(r.DomainName) == 0 {
-		if r.IP.To4() != nil {
-			return fmt.Sprintf("%s:%d", r.IP.String(), r.Port)
-		} else {
-			return fmt.Sprintf("[%s]:%d", r.IP.String(), r.Port)
-		}
-	} else {
-		return fmt.Sprintf("%s:%d", r.DomainName, r.Port)
-	}
-}
-
-type HasRequest interface {
-	GetRequest() *Request
+	return r.Address.String()
 }
 
 type HasHash interface {
@@ -73,11 +51,11 @@ type NeedRespond interface {
 }
 
 type PacketReader interface {
-	ReadPacket() (*Request, []byte, error)
+	ReadPacket() (req *Request, payload []byte, err error)
 }
 
 type PacketWriter interface {
-	WritePacket(req *Request, packet []byte) (int, error)
+	WritePacket(req *Request, payload []byte) (n int, err error)
 }
 
 type PacketReadWriter interface {
@@ -99,7 +77,6 @@ type NeedMeter interface {
 
 type ConnSession interface {
 	io.ReadWriteCloser
-	HasRequest
 }
 
 type PacketSession interface {
@@ -107,79 +84,82 @@ type PacketSession interface {
 	io.Closer
 }
 
-func ParseAddress(r io.Reader) (*Request, error) {
-	var buf1 [1]byte
-	_, err := io.ReadFull(r, buf1[:])
+func ParseAddress(conn io.Reader, network string) (*common.Address, error) {
+	byteBuf := [1]byte{}
+	_, err := conn.Read(byteBuf[:])
 	if err != nil {
 		return nil, common.NewError("cannot read atype").Base(err)
 	}
-	atype := AddressType(buf1[0])
-	req := &Request{
-		AddressType: atype,
+	addr := &common.Address{
+		AddressType: common.AddressType(byteBuf[0]),
 	}
-	switch atype {
-	case IPv4:
+	switch addr.AddressType {
+	case common.IPv4:
 		var buf [6]byte
-		_, err := io.ReadFull(r, buf[:])
+		_, err := conn.Read(buf[:])
 		if err != nil {
 			return nil, common.NewError("failed to read ipv4").Base(err)
 		}
-		req.IP = buf[0:4]
-		req.Port = int(binary.BigEndian.Uint16(buf[4:6]))
-	case IPv6:
+		addr.IP = buf[0:4]
+		addr.Port = int(binary.BigEndian.Uint16(buf[4:6]))
+	case common.IPv6:
 		var buf [18]byte
-		_, err := io.ReadFull(r, buf[:])
+		conn.Read(buf[:])
 		if err != nil {
 			return nil, common.NewError("failed to read ipv6").Base(err)
 		}
-		req.IP = buf[0:16]
-		req.Port = int(binary.BigEndian.Uint16(buf[16:18]))
-	case DomainName:
-		_, err := io.ReadFull(r, buf1[:])
+		addr.IP = buf[0:16]
+		addr.Port = int(binary.BigEndian.Uint16(buf[16:18]))
+	case common.DomainName:
+		_, err := conn.Read(byteBuf[:])
+		length := byteBuf[0]
 		if err != nil {
 			return nil, common.NewError("failed to read length")
 		}
-		length := buf1[0]
 		buf := make([]byte, length+2)
-		_, err = io.ReadFull(r, buf)
+		_, err = conn.Read(buf)
 		if err != nil {
 			return nil, common.NewError("failed to read domain")
 		}
 		//the fucking browser uses ip as a domain name sometimes
 		host := buf[0:length]
 		if ip := net.ParseIP(string(host)); ip != nil {
-			req.IP = ip
+			addr.IP = ip
 			if ip.To4() != nil {
-				req.AddressType = IPv4
+				addr.AddressType = common.IPv4
 			} else {
-				req.AddressType = IPv6
+				addr.AddressType = common.IPv6
 			}
 		} else {
-			req.DomainName = host
+			addr.DomainName = string(host)
 		}
-		req.Port = int(binary.BigEndian.Uint16(buf[length : length+2]))
+		addr.Port = int(binary.BigEndian.Uint16(buf[length : length+2]))
 	default:
 		return nil, common.NewError("invalid dest type")
 	}
-	return req, nil
+	addr.NetworkType = network
+	return addr, nil
 }
 
 func WriteAddress(w io.Writer, request *Request) error {
 	_, err := w.Write([]byte{byte(request.AddressType)})
 	switch request.AddressType {
-	case DomainName:
+	case common.DomainName:
 		w.Write([]byte{byte((len(request.DomainName)))})
-		_, err = w.Write(request.DomainName)
-	case IPv4:
+		_, err = w.Write([]byte(request.DomainName))
+	case common.IPv4:
 		_, err = w.Write(request.IP.To4())
-	case IPv6:
+	case common.IPv6:
 		_, err = w.Write(request.IP.To16())
 	default:
 		return common.NewError("invalid address type")
 	}
+	if err != nil {
+		return err
+	}
 	port := [2]byte{}
 	binary.BigEndian.PutUint16(port[:], uint16(request.Port))
-	w.Write(port[:])
+	_, err = w.Write(port[:])
 	return err
 }
 

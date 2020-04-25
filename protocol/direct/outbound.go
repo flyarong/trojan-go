@@ -1,7 +1,6 @@
 package direct
 
 import (
-	"bufio"
 	"context"
 	"io"
 	"net"
@@ -14,37 +13,30 @@ import (
 
 type DirectOutboundConnSession struct {
 	protocol.ConnSession
-	conn          io.ReadWriteCloser
-	bufReadWriter *bufio.ReadWriter
-	request       *protocol.Request
+	conn    io.ReadWriteCloser
+	request *protocol.Request
 }
 
 func (o *DirectOutboundConnSession) Read(p []byte) (int, error) {
-	return o.bufReadWriter.Read(p)
+	return o.conn.Read(p)
 }
 
 func (o *DirectOutboundConnSession) Write(p []byte) (int, error) {
-	n, err := o.bufReadWriter.Write(p)
-	o.bufReadWriter.Flush()
-	return n, err
+	return o.conn.Write(p)
 }
 
 func (o *DirectOutboundConnSession) Close() error {
 	return o.conn.Close()
 }
 
-func NewOutboundConnSession(conn io.ReadWriteCloser, req *protocol.Request) (protocol.ConnSession, error) {
-	o := &DirectOutboundConnSession{}
-	o.request = req
-	if conn == nil {
-		newConn, err := net.Dial(req.Network(), req.String())
-		if err != nil {
-			return nil, err
-		}
-		o.conn = newConn
-		o.bufReadWriter = common.NewBufReadWriter(newConn)
-	} else {
-		o.conn = conn
+func NewOutboundConnSession(req *protocol.Request) (protocol.ConnSession, error) {
+	newConn, err := net.Dial(req.Network(), req.String())
+	if err != nil {
+		return nil, err
+	}
+	o := &DirectOutboundConnSession{
+		request: req,
+		conn:    newConn,
 	}
 	return o, nil
 }
@@ -99,7 +91,7 @@ func (o *DirectOutboundPacketSession) ReadPacket() (*protocol.Request, []byte, e
 
 func (o *DirectOutboundPacketSession) WritePacket(req *protocol.Request, packet []byte) (int, error) {
 	var remote *net.UDPAddr
-	if req.AddressType == protocol.DomainName {
+	if req.AddressType == common.DomainName {
 		remote, err := net.ResolveUDPAddr("", string(req.DomainName))
 		if err != nil {
 			return 0, err
@@ -115,14 +107,14 @@ func (o *DirectOutboundPacketSession) WritePacket(req *protocol.Request, packet 
 	if err != nil {
 		return 0, common.NewError("cannot dial udp").Base(err)
 	}
-	log.Debug("UDP directly dialing to", remote)
+	log.Debug("udp directly dialing to", remote)
 	go o.listenConn(req, conn)
 	n, err := conn.Write(packet)
 	return n, err
 }
 
-func NewOutboundPacketSession() (protocol.PacketSession, error) {
-	ctx, cancel := context.WithCancel(context.Background())
+func NewOutboundPacketSession(ctx context.Context) (protocol.PacketSession, error) {
+	ctx, cancel := context.WithCancel(ctx)
 	return &DirectOutboundPacketSession{
 		ctx:        ctx,
 		cancel:     cancel,

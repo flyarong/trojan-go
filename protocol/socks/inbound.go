@@ -1,7 +1,6 @@
 package socks
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"io"
@@ -17,18 +16,17 @@ import (
 type SocksConnInboundSession struct {
 	protocol.ConnSession
 	protocol.NeedRespond
-	request       *protocol.Request
-	conn          io.ReadWriteCloser
-	bufReadWriter *bufio.ReadWriter
+	request *protocol.Request
+	rwc     *common.RewindReadWriteCloser
 }
 
 func (i *SocksConnInboundSession) checkVersion() error {
-	version, err := i.bufReadWriter.ReadByte()
+	version, err := i.rwc.ReadByte()
 	if err != nil {
 		return err
 	}
 	if version != 0x5 {
-		return common.NewError("unsupported version")
+		return common.NewError("unsupported socks version")
 	}
 	return nil
 }
@@ -37,12 +35,12 @@ func (i *SocksConnInboundSession) auth() error {
 	if err := i.checkVersion(); err != nil {
 		return err
 	}
-	nmethods, err := i.bufReadWriter.ReadByte()
+	nmethods, err := i.rwc.ReadByte()
 	if err != nil {
 		return err
 	}
-	i.bufReadWriter.Discard(int(nmethods))
-	i.conn.Write([]byte{0x5, 0x0})
+	i.rwc.Discard(int(nmethods))
+	i.rwc.Write([]byte{0x5, 0x0})
 	return nil
 }
 
@@ -50,11 +48,11 @@ func (i *SocksConnInboundSession) parseRequest() error {
 	if err := i.checkVersion(); err != nil {
 		return err
 	}
-	cmd, err := i.bufReadWriter.ReadByte()
+	cmd, err := i.rwc.ReadByte()
 	if err != nil {
 		return common.NewError("cannot read cmd").Base(err)
 	}
-	i.bufReadWriter.Discard(1)
+	i.rwc.Discard(1)
 
 	switch protocol.Command(cmd) {
 	case protocol.Connect, protocol.Associate:
@@ -62,13 +60,14 @@ func (i *SocksConnInboundSession) parseRequest() error {
 		return common.NewError("invalid command")
 	}
 
-	request, err := protocol.ParseAddress(i.bufReadWriter)
+	addr, err := protocol.ParseAddress(i.rwc, "tcp")
 	if err != nil {
 		return common.NewError("cannot read request").Base(err)
 	}
-	request.Command = protocol.Command(cmd)
-	request.NetworkType = "tcp"
-
+	request := &protocol.Request{
+		Address: addr,
+		Command: protocol.Command(cmd),
+	}
 	i.request = request
 	return nil
 }
@@ -77,47 +76,37 @@ func (i *SocksConnInboundSession) Respond() error {
 	if i.request.Command == protocol.Connect {
 		i.Write([]byte{0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 		return nil
-	} else {
-		resp := bytes.NewBuffer([]byte{0x05, 0x00, 0x00})
-		common.Must(protocol.WriteAddress(resp, i.request))
-		_, err := i.Write(resp.Bytes())
-		return err
 	}
+	//associate
+	resp := bytes.NewBuffer([]byte{0x05, 0x00, 0x00})
+	common.Must(protocol.WriteAddress(resp, i.request))
+	_, err := i.Write(resp.Bytes())
+	return err
 }
 
 func (i *SocksConnInboundSession) Read(p []byte) (int, error) {
-	return i.bufReadWriter.Read(p)
+	return i.rwc.Read(p)
 }
 
 func (i *SocksConnInboundSession) Write(p []byte) (int, error) {
-	n, err := i.bufReadWriter.Write(p)
-	i.bufReadWriter.Flush()
-	return n, err
+	return i.rwc.Write(p)
 }
 
 func (i *SocksConnInboundSession) Close() error {
-	return i.conn.Close()
+	return i.rwc.Close()
 }
 
-func (i *SocksConnInboundSession) GetRequest() *protocol.Request {
-	return i.request
-}
-
-func NewInboundConnSession(conn io.ReadWriteCloser, rw *bufio.ReadWriter) (protocol.ConnSession, error) {
-	i := &SocksConnInboundSession{}
-	i.conn = conn
-	if rw == nil {
-		i.bufReadWriter = common.NewBufReadWriter(conn)
-	} else {
-		i.bufReadWriter = rw
+func NewInboundConnSession(rwc *common.RewindReadWriteCloser) (protocol.ConnSession, *protocol.Request, error) {
+	i := &SocksConnInboundSession{
+		rwc: rwc,
 	}
 	if err := i.auth(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := i.parseRequest(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return i, nil
+	return i, i.request, nil
 }
 
 type udpSession struct {
@@ -146,11 +135,14 @@ func (i *SocksInboundPacketSession) parsePacket(rawPacket []byte) (*protocol.Req
 	if frag != 0 {
 		return nil, nil, common.NewError("fragment is not supported")
 	}
-	request, err := protocol.ParseAddress(buf)
+	addr, err := protocol.ParseAddress(buf, "udp")
 	if err != nil {
 		return nil, nil, common.NewError("cannot parse udp request").Base(err)
 	}
-	request.NetworkType = "udp"
+	//command make no sense here
+	request := &protocol.Request{
+		Address: addr,
+	}
 	return request, buf.Bytes(), nil
 }
 
@@ -202,7 +194,7 @@ func (i *SocksInboundPacketSession) ReadPacket() (*protocol.Request, []byte, err
 	i.tableMutex.Lock()
 	i.sessionTable[req.String()] = session
 	i.tableMutex.Unlock()
-	log.Debug("UDP read from", src, "req", req)
+	log.Debug("udp read from", src, "req", req)
 	return req, payload, err
 }
 
@@ -219,7 +211,7 @@ func (i *SocksInboundPacketSession) WritePacket(req *protocol.Request, packet []
 		return 0, common.NewError("session not found")
 	}
 	client.expire = time.Now().Add(protocol.UDPTimeout)
-	log.Debug("UDP write to", client.src, "req", req)
+	log.Debug("udp write to", client.src, "req", req)
 	return i.conn.WriteToUDP(w.Bytes(), client.src)
 }
 
@@ -228,8 +220,8 @@ func (i *SocksInboundPacketSession) Close() error {
 	return i.conn.Close()
 }
 
-func NewInboundPacketSession(conn *net.UDPConn) (*SocksInboundPacketSession, error) {
-	ctx, cancel := context.WithCancel(context.Background())
+func NewInboundPacketSession(ctx context.Context, conn *net.UDPConn) (*SocksInboundPacketSession, error) {
+	ctx, cancel := context.WithCancel(ctx)
 	conn.SetWriteBuffer(0)
 	i := &SocksInboundPacketSession{
 		ctx:          ctx,

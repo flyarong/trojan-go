@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	Version = "v0.1.2"
+	Version = "v0.4.0"
 )
 
 type Runnable interface {
@@ -19,7 +19,10 @@ type Runnable interface {
 	Close() error
 }
 
-func NewBufReadWriter(rw io.ReadWriter) *bufio.ReadWriter {
+func NewBufioReadWriter(rw io.ReadWriter) *bufio.ReadWriter {
+	if bufrw, ok := rw.(*bufio.ReadWriter); ok {
+		return bufrw
+	}
 	return bufio.NewReadWriter(bufio.NewReader(rw), bufio.NewWriter(rw))
 }
 
@@ -32,25 +35,6 @@ func SHA224String(password string) string {
 		str += fmt.Sprintf("%02x", v)
 	}
 	return str
-}
-
-const (
-	KiB = 1024
-	MiB = KiB * 1024
-	GiB = MiB * 1024
-)
-
-func HumanFriendlyTraffic(bytes int) string {
-	if bytes <= KiB {
-		return fmt.Sprintf("%d B", bytes)
-	}
-	if bytes <= MiB {
-		return fmt.Sprintf("%.2f KiB", float32(bytes)/KiB)
-	}
-	if bytes <= GiB {
-		return fmt.Sprintf("%.2f MiB", float32(bytes)/MiB)
-	}
-	return fmt.Sprintf("%.2f GiB", float32(bytes)/GiB)
 }
 
 func GetProgramDir() string {

@@ -9,7 +9,9 @@ func (e *Error) Error() string {
 }
 
 func (e *Error) Base(err error) *Error {
-	e.info += " | " + err.Error()
+	if err != nil {
+		e.info += " | " + err.Error()
+	}
 	return e
 }
 
@@ -20,6 +22,12 @@ func NewError(info string) *Error {
 }
 
 func Must(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+
+func Must2(_ interface{}, err error) {
 	if err != nil {
 		panic(err)
 	}

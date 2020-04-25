@@ -3,7 +3,8 @@ package conf
 import (
 	"crypto/tls"
 	"crypto/x509"
-	"net"
+
+	"github.com/p4gefau1t/trojan-go/common"
 )
 
 type RunType string
@@ -13,6 +14,7 @@ const (
 	Server  RunType = "server"
 	NAT     RunType = "nat"
 	Forward RunType = "forward"
+	Relay   RunType = "relay"
 )
 
 type TLSConfig struct {
@@ -26,15 +28,16 @@ type TLSConfig struct {
 	PreferServerCipher bool   `json:"prefer_server_cipher"`
 	SNI                string `json:"sni"`
 	HTTPFile           string `json:"plain_http_response"`
+	FallbackHost       string `json:"fallback_addr"`
 	FallbackPort       int    `json:"fallback_port"`
+	ReuseSession       bool   `json:"reuse_session"`
 
-	FallbackAddr     net.Addr
+	FallbackAddress  *common.Address
 	CertPool         *x509.CertPool
 	KeyPair          []tls.Certificate
 	HTTPResponse     []byte
 	CipherSuites     []uint16
 	CipherSuiteTLS13 []uint16
-	ReuseSession     bool
 	SessionTicket    bool
 	Curves           string
 }
@@ -97,9 +100,22 @@ type RouterConfig struct {
 }
 
 type WebsocketConfig struct {
-	Enabled  bool   `json:"enabled"`
-	HostName string `json:"hostname"`
-	Path     string `json:"path"`
+	Enabled             bool   `json:"enabled"`
+	HostName            string `json:"hostname"`
+	Path                string `json:"path"`
+	ObfuscationPassword string `json:"obfuscation_password"`
+	DoubleTLS           bool   `json:"double_tls"`
+	DoubleTLSVerify     bool   `json:"double_tls_verify"`
+
+	ObfuscationKey []byte
+}
+
+type APIConfig struct {
+	Enabled bool   `json:"enabled"`
+	APIHost string `json:"api_addr"`
+	APIPort int    `json:"api_port"`
+
+	APIAddress *common.Address
 }
 
 type GlobalConfig struct {
@@ -107,9 +123,13 @@ type GlobalConfig struct {
 	LogLevel   int             `json:"log_level"`
 	LocalHost  string          `json:"local_addr"`
 	LocalPort  int             `json:"local_port"`
+	TargetHost string          `json:"target_addr"`
+	TargetPort int             `json:"target_port"`
 	RemoteHost string          `json:"remote_addr"`
 	RemotePort int             `json:"remote_port"`
+	BufferSize int             `json:"buffer_size"`
 	Passwords  []string        `json:"password"`
+	DNS        []string        `json:"dns"`
 	TLS        TLSConfig       `json:"ssl"`
 	TCP        TCPConfig       `json:"tcp"`
 	MySQL      MySQLConfig     `json:"mysql"`
@@ -117,10 +137,10 @@ type GlobalConfig struct {
 	Mux        MuxConfig       `json:"mux"`
 	Router     RouterConfig    `json:"router"`
 	Websocket  WebsocketConfig `json:"websocket"`
+	API        APIConfig       `json:"api"`
 
-	LocalAddr  net.Addr
-	LocalIP    net.IP
-	RemoteAddr net.Addr
-	RemoteIP   net.IP
-	Hash       map[string]string
+	LocalAddress  *common.Address
+	RemoteAddress *common.Address
+	TargetAddress *common.Address
+	Hash          map[string]string
 }

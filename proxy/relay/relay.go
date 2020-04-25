@@ -1,4 +1,4 @@
-package forward
+package relay
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"github.com/p4gefau1t/trojan-go/proxy"
 )
 
-type Forward struct {
+type Relay struct {
 	common.Runnable
 	config   *conf.GlobalConfig
 	ctx      context.Context
@@ -18,17 +18,20 @@ type Forward struct {
 	listener net.Listener
 }
 
-func (f *Forward) handleConn(conn net.Conn) {
-	newConn, err := net.Dial("tcp", f.config.RemoteAddr.String())
+func (f *Relay) handleConn(conn net.Conn) {
+	defer conn.Close()
+	newConn, err := net.Dial("tcp", f.config.RemoteAddress.String())
 	if err != nil {
 		log.Error("failed to connect to remote endpoint:", err)
 		return
 	}
-	proxy.ProxyConn(newConn, conn)
+	defer newConn.Close()
+	proxy.ProxyConn(f.ctx, newConn, conn, f.config.BufferSize)
 }
 
-func (f *Forward) Run() error {
-	listener, err := net.Listen("tcp", f.config.LocalAddr.String())
+func (f *Relay) Run() error {
+	log.Info("relay is running at", f.config.LocalAddress)
+	listener, err := net.Listen("tcp", f.config.LocalAddress.String())
 	f.listener = listener
 	if err != nil {
 		return common.NewError("failed to listen local address").Base(err)
@@ -43,25 +46,25 @@ func (f *Forward) Run() error {
 			default:
 			}
 			log.Error(err)
-			continue
+			return err
 		}
 		go f.handleConn(conn)
 	}
 }
 
-func (f *Forward) Close() error {
-	log.Info("shutting down forward..")
-	f.listener.Close()
+func (f *Relay) Close() error {
+	log.Info("shutting down relay..")
 	f.cancel()
+	f.listener.Close()
 	return nil
 }
 
-func (f *Forward) Build(config *conf.GlobalConfig) (common.Runnable, error) {
+func (f *Relay) Build(config *conf.GlobalConfig) (common.Runnable, error) {
 	f.ctx, f.cancel = context.WithCancel(context.Background())
 	f.config = config
 	return f, nil
 }
 
 func init() {
-	proxy.RegisterProxy(conf.Forward, &Forward{})
+	proxy.RegisterProxy(conf.Relay, &Relay{})
 }
