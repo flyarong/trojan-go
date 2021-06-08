@@ -2,83 +2,16 @@ package common
 
 import (
 	"fmt"
+	"io"
+	"io/ioutil"
 	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"strconv"
+	"strings"
+	"time"
 )
-
-type AddressType byte
-
-const (
-	IPv4       AddressType = 1
-	DomainName AddressType = 3
-	IPv6       AddressType = 4
-)
-
-type Address struct {
-	net.Addr
-
-	DomainName  string
-	IP          net.IP
-	Port        int
-	NetworkType string
-	AddressType
-}
-
-func (a *Address) String() string {
-	switch a.AddressType {
-	case IPv4:
-		return fmt.Sprintf("%s:%d", a.IP.String(), a.Port)
-	case IPv6:
-		return fmt.Sprintf("[%s]:%d", a.IP.String(), a.Port)
-	case DomainName:
-		return fmt.Sprintf("%s:%d", a.DomainName, a.Port)
-	default:
-		return ""
-	}
-}
-
-func (a *Address) Network() string {
-	return a.NetworkType
-}
-
-func (a *Address) ResolveIP(preferV4 bool) (net.IP, error) {
-	if a.AddressType == IPv4 || a.AddressType == IPv6 {
-		return a.IP, nil
-	}
-	network := "ip"
-	if preferV4 {
-		network = "ip4"
-	}
-	addr, err := net.ResolveIPAddr(network, a.DomainName)
-	if err != nil {
-		return nil, err
-	}
-	return addr.IP, nil
-}
-
-func NewAddress(host string, port int, network string) *Address {
-	if ip := net.ParseIP(host); ip != nil {
-		if ip.To4() != nil {
-			return &Address{
-				IP:          ip,
-				Port:        port,
-				AddressType: IPv4,
-				NetworkType: network,
-			}
-		}
-		return &Address{
-			IP:          ip,
-			Port:        port,
-			AddressType: IPv6,
-			NetworkType: network,
-		}
-	}
-	return &Address{
-		DomainName:  host,
-		Port:        port,
-		AddressType: DomainName,
-		NetworkType: network,
-	}
-}
 
 const (
 	KiB = 1024
@@ -97,4 +30,94 @@ func HumanFriendlyTraffic(bytes uint64) string {
 		return fmt.Sprintf("%.2f MiB", float32(bytes)/MiB)
 	}
 	return fmt.Sprintf("%.2f GiB", float32(bytes)/GiB)
+}
+
+func PickPort(network string, host string) int {
+	switch network {
+	case "tcp":
+		for retry := 0; retry < 16; retry++ {
+			l, err := net.Listen("tcp", host+":0")
+			if err != nil {
+				continue
+			}
+			defer l.Close()
+			_, port, err := net.SplitHostPort(l.Addr().String())
+			Must(err)
+			p, err := strconv.ParseInt(port, 10, 32)
+			Must(err)
+			return int(p)
+		}
+	case "udp":
+		for retry := 0; retry < 16; retry++ {
+			conn, err := net.ListenPacket("udp", host+":0")
+			if err != nil {
+				continue
+			}
+			defer conn.Close()
+			_, port, err := net.SplitHostPort(conn.LocalAddr().String())
+			Must(err)
+			p, err := strconv.ParseInt(port, 10, 32)
+			Must(err)
+			return int(p)
+		}
+	default:
+		return 0
+	}
+	return 0
+}
+
+func WriteAllBytes(writer io.Writer, payload []byte) error {
+	for len(payload) > 0 {
+		n, err := writer.Write(payload)
+		if err != nil {
+			return err
+		}
+		payload = payload[n:]
+	}
+	return nil
+}
+
+func WriteFile(path string, payload []byte) error {
+	writer, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer writer.Close()
+
+	return WriteAllBytes(writer, payload)
+}
+
+func FetchHTTPContent(target string) ([]byte, error) {
+	parsedTarget, err := url.Parse(target)
+	if err != nil {
+		return nil, fmt.Errorf("invalid URL: %s", target)
+	}
+
+	if s := strings.ToLower(parsedTarget.Scheme); s != "http" && s != "https" {
+		return nil, fmt.Errorf("invalid scheme: %s", parsedTarget.Scheme)
+	}
+
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+	resp, err := client.Do(&http.Request{
+		Method: "GET",
+		URL:    parsedTarget,
+		Close:  true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to dial to %s", target)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected HTTP status code: %d", resp.StatusCode)
+	}
+
+	content, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read HTTP response")
+	}
+
+	return content, nil
 }

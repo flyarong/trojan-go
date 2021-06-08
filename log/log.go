@@ -1,11 +1,12 @@
 package log
 
 import (
+	"io"
 	"os"
 )
 
-//LogLevel how much log to dump
-//0: ALL; 1: INFO; 2: WARN; 3: ERROR; 4: FATAL; 5: OFF
+// LogLevel how much log to dump
+// 0: ALL; 1: INFO; 2: WARN; 3: ERROR; 4: FATAL; 5: OFF
 type LogLevel int
 
 const (
@@ -31,6 +32,7 @@ type Logger interface {
 	Trace(v ...interface{})
 	Tracef(format string, v ...interface{})
 	SetLogLevel(level LogLevel)
+	SetOutput(io.Writer)
 }
 
 var logger Logger = &EmptyLogger{}
@@ -43,7 +45,6 @@ func (l *EmptyLogger) Fatal(v ...interface{}) { os.Exit(1) }
 
 func (l *EmptyLogger) Fatalf(format string, v ...interface{}) { os.Exit(1) }
 
-// Error print error message to output
 func (l *EmptyLogger) Error(v ...interface{}) {}
 
 func (l *EmptyLogger) Errorf(format string, v ...interface{}) {}
@@ -63,6 +64,8 @@ func (l *EmptyLogger) Debugf(format string, v ...interface{}) {}
 func (l *EmptyLogger) Trace(v ...interface{}) {}
 
 func (l *EmptyLogger) Tracef(format string, v ...interface{}) {}
+
+func (l *EmptyLogger) SetOutput(w io.Writer) {}
 
 func Error(v ...interface{}) {
 	logger.Error(v...)
@@ -85,7 +88,7 @@ func Info(v ...interface{}) {
 }
 
 func Infof(format string, v ...interface{}) {
-	logger.Warnf(format, v...)
+	logger.Infof(format, v...)
 }
 
 func Debug(v ...interface{}) {
@@ -93,7 +96,7 @@ func Debug(v ...interface{}) {
 }
 
 func Debugf(format string, v ...interface{}) {
-	logger.Warnf(format, v...)
+	logger.Debugf(format, v...)
 }
 
 func Trace(v ...interface{}) {
@@ -114,6 +117,10 @@ func Fatalf(format string, v ...interface{}) {
 
 func SetLogLevel(level LogLevel) {
 	logger.SetLogLevel(level)
+}
+
+func SetOutput(w io.Writer) {
+	logger.SetOutput(w)
 }
 
 func RegisterLogger(l Logger) {

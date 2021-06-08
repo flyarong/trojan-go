@@ -3,27 +3,15 @@ package main
 import (
 	"flag"
 
-	"github.com/p4gefau1t/trojan-go/common"
+	_ "github.com/p4gefau1t/trojan-go/component"
 	"github.com/p4gefau1t/trojan-go/log"
-
-	//the following modules are optional
-	//you can comment some of them if you don't need them
-	_ "github.com/go-sql-driver/mysql"
-	_ "github.com/p4gefau1t/trojan-go/cert"
-	_ "github.com/p4gefau1t/trojan-go/daemon"
-	_ "github.com/p4gefau1t/trojan-go/easy"
-	_ "github.com/p4gefau1t/trojan-go/log/golog"
-	_ "github.com/p4gefau1t/trojan-go/proxy/client"
-	_ "github.com/p4gefau1t/trojan-go/proxy/relay"
-	_ "github.com/p4gefau1t/trojan-go/proxy/server"
-	_ "github.com/p4gefau1t/trojan-go/version"
-	//_ "github.com/p4gefau1t/trojan-go/log/simplelog"
+	"github.com/p4gefau1t/trojan-go/option"
 )
 
 func main() {
 	flag.Parse()
 	for {
-		h, err := common.PopOptionHandler()
+		h, err := option.PopOptionHandler()
 		if err != nil {
 			log.Fatal("invalid options")
 		}

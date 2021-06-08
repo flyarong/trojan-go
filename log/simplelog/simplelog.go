@@ -1,7 +1,9 @@
 package simplelog
 
 import (
+	"io"
 	golog "log"
+	"os"
 
 	"github.com/p4gefau1t/trojan-go/log"
 )
@@ -22,12 +24,14 @@ func (l *SimpleLogger) Fatal(v ...interface{}) {
 	if l.logLevel <= log.FatalLevel {
 		golog.Fatal(v...)
 	}
+	os.Exit(1)
 }
 
 func (l *SimpleLogger) Fatalf(format string, v ...interface{}) {
 	if l.logLevel <= log.FatalLevel {
 		golog.Fatalf(format, v...)
 	}
+	os.Exit(1)
 }
 
 func (l *SimpleLogger) Error(v ...interface{}) {
@@ -88,4 +92,8 @@ func (l *SimpleLogger) Tracef(format string, v ...interface{}) {
 	if l.logLevel <= log.AllLevel {
 		golog.Printf(format, v...)
 	}
+}
+
+func (l *SimpleLogger) SetOutput(io.Writer) {
+	// do nothing
 }

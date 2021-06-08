@@ -1,29 +1,17 @@
 package common
 
 import (
-	"bufio"
 	"crypto/sha256"
 	"fmt"
-	"io"
-	"log"
 	"os"
 	"path/filepath"
-)
 
-const (
-	Version = "v0.4.0"
+	"github.com/p4gefau1t/trojan-go/log"
 )
 
 type Runnable interface {
 	Run() error
 	Close() error
-}
-
-func NewBufioReadWriter(rw io.ReadWriter) *bufio.ReadWriter {
-	if bufrw, ok := rw.(*bufio.ReadWriter); ok {
-		return bufrw
-	}
-	return bufio.NewReadWriter(bufio.NewReader(rw), bufio.NewWriter(rw))
 }
 
 func SHA224String(password string) string {
@@ -43,4 +31,19 @@ func GetProgramDir() string {
 		log.Fatal(err)
 	}
 	return dir
+}
+
+func GetAssetLocation(file string) string {
+	if filepath.IsAbs(file) {
+		return file
+	}
+	if loc := os.Getenv("TROJAN_GO_LOCATION_ASSET"); loc != "" {
+		absPath, err := filepath.Abs(loc)
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Debugf("env set: TROJAN_GO_LOCATION_ASSET=%s", absPath)
+		return filepath.Join(absPath, file)
+	}
+	return filepath.Join(GetProgramDir(), file)
 }

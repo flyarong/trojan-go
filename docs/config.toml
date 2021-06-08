@@ -1,23 +1,21 @@
 baseURL = "https://p4gefau1t.github.io/trojan-go"
 
-languageCode = "en-us"
-DefaultContentLanguage = "en"
-title = "Trojan-Go"
+languageCode = "zh-CN"
+title = "Trojan-Go Docs"
 theme = "hugo-theme-techdoc"
 
 hasCJKLanguage = true
 metaDataFormat = "yaml"
 
-defaultContentLanguage = "en"
-defaultContentLanguageInSubdir= false
+defaultContentLanguage = "zh"
+defaultContentLanguageInSubdir= true
 enableMissingTranslationPlaceholders = false
 
 [params]
 
     # Source Code repository section
-    description = "An unidentifiable mechanism that helps you bypass GFW. "
+    description = "An unidentifiable mechanism that helps you bypass GFW."
     github_repository = "https://github.com/p4gefau1t/trojan-go"
-    version = "0.4.0"
 
     # Documentation repository section
     # documentation repository (set edit link to documentation repository)
@@ -32,7 +30,7 @@ enableMissingTranslationPlaceholders = false
     # Open Graph settings for each page are set on the front matter.
     # See https://gohugo.io/templates/internal/#open-graph
     # See https://gohugo.io/templates/internal/#twitter-cards
-    title = "Hugo Techdoc Theme"
+    title = "Trojan-Go Docs"
     images = ["images/og-image.png"] # Open graph images are placed in `static/images`
 
     # Theme settings section
@@ -78,11 +76,6 @@ enableMissingTranslationPlaceholders = false
         name = "GitHub"
         url = "https://github.com/p4gefau1t"
         weight = 2
-        
-    [[menu.main]]
-        name = "Twitter"
-        url = "https://twitter.com/p4gefau1t"
-        weight = 3
 
 # Markup configure section
 # See https://gohugo.io/getting-started/configuration-markup/

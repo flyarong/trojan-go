@@ -10,11 +10,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	terminal "golang.org/x/term"
 
 	"github.com/p4gefau1t/trojan-go/log"
 	"github.com/p4gefau1t/trojan-go/log/golog/colorful"
-	"golang.org/x/crypto/ssh/terminal"
 )
 
 func init() {
@@ -32,12 +34,12 @@ type FdWriter interface {
 type Logger struct {
 	mu        sync.RWMutex
 	color     bool
-	out       FdWriter
+	out       io.Writer
 	debug     bool
 	timestamp bool
 	quiet     bool
 	buf       colorful.ColorBuffer
-	logLevel  int
+	logLevel  int32
 }
 
 // Prefix struct define plain and color byte
@@ -107,7 +109,19 @@ func New(out FdWriter) *Logger {
 }
 
 func (l *Logger) SetLogLevel(level log.LogLevel) {
-	l.logLevel = int(level)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	atomic.StoreInt32(&l.logLevel, int32(level))
+}
+
+func (l *Logger) SetOutput(w io.Writer) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.color = false
+	if fdw, ok := w.(FdWriter); ok {
+		l.color = terminal.IsTerminal(int(fdw.Fd()))
+	}
+	l.out = w
 }
 
 // WithColor explicitly turn on colorful features on the log
@@ -218,7 +232,7 @@ func (l *Logger) Output(depth int, prefix Prefix, data string) error {
 	// Acquire exclusive access to the shared buffer
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	// Reset buffer so it start from the begining
+	// Reset buffer so it start from the beginning
 	l.buf.Reset()
 	// Write prefix to the buffer
 	if l.color {
@@ -282,7 +296,7 @@ func (l *Logger) Output(depth int, prefix Prefix, data string) error {
 
 // Fatal print fatal message to output and quit the application with status 1
 func (l *Logger) Fatal(v ...interface{}) {
-	if l.logLevel <= 4 {
+	if atomic.LoadInt32(&l.logLevel) <= 4 {
 		l.Output(1, FatalPrefix, fmt.Sprintln(v...))
 	}
 	os.Exit(1)
@@ -291,7 +305,7 @@ func (l *Logger) Fatal(v ...interface{}) {
 // Fatalf print formatted fatal message to output and quit the application
 // with status 1
 func (l *Logger) Fatalf(format string, v ...interface{}) {
-	if l.logLevel <= 4 {
+	if atomic.LoadInt32(&l.logLevel) <= 4 {
 		l.Output(1, FatalPrefix, fmt.Sprintf(format, v...))
 	}
 	os.Exit(1)
@@ -299,70 +313,70 @@ func (l *Logger) Fatalf(format string, v ...interface{}) {
 
 // Error print error message to output
 func (l *Logger) Error(v ...interface{}) {
-	if l.logLevel <= 3 {
+	if atomic.LoadInt32(&l.logLevel) <= 3 {
 		l.Output(1, ErrorPrefix, fmt.Sprintln(v...))
 	}
 }
 
 // Errorf print formatted error message to output
 func (l *Logger) Errorf(format string, v ...interface{}) {
-	if l.logLevel <= 3 {
+	if atomic.LoadInt32(&l.logLevel) <= 3 {
 		l.Output(1, ErrorPrefix, fmt.Sprintf(format, v...))
 	}
 }
 
 // Warn print warning message to output
 func (l *Logger) Warn(v ...interface{}) {
-	if l.logLevel <= 2 {
+	if atomic.LoadInt32(&l.logLevel) <= 2 {
 		l.Output(1, WarnPrefix, fmt.Sprintln(v...))
 	}
 }
 
 // Warnf print formatted warning message to output
 func (l *Logger) Warnf(format string, v ...interface{}) {
-	if l.logLevel <= 2 {
+	if atomic.LoadInt32(&l.logLevel) <= 2 {
 		l.Output(1, WarnPrefix, fmt.Sprintf(format, v...))
 	}
 }
 
 // Info print informational message to output
 func (l *Logger) Info(v ...interface{}) {
-	if l.logLevel <= 1 {
+	if atomic.LoadInt32(&l.logLevel) <= 1 {
 		l.Output(1, InfoPrefix, fmt.Sprintln(v...))
 	}
 }
 
 // Infof print formatted informational message to output
 func (l *Logger) Infof(format string, v ...interface{}) {
-	if l.logLevel <= 1 {
+	if atomic.LoadInt32(&l.logLevel) <= 1 {
 		l.Output(1, InfoPrefix, fmt.Sprintf(format, v...))
 	}
 }
 
 // Debug print debug message to output if debug output enabled
 func (l *Logger) Debug(v ...interface{}) {
-	if l.logLevel == 0 {
+	if atomic.LoadInt32(&l.logLevel) == 0 {
 		l.Output(1, DebugPrefix, fmt.Sprintln(v...))
 	}
 }
 
 // Debugf print formatted debug message to output if debug output enabled
 func (l *Logger) Debugf(format string, v ...interface{}) {
-	if l.logLevel == 0 {
+	if atomic.LoadInt32(&l.logLevel) == 0 {
 		l.Output(1, DebugPrefix, fmt.Sprintf(format, v...))
 	}
 }
 
 // Trace print trace message to output if debug output enabled
 func (l *Logger) Trace(v ...interface{}) {
-	if l.logLevel == 0 {
+	if atomic.LoadInt32(&l.logLevel) == 0 {
 		l.Output(1, TracePrefix, fmt.Sprintln(v...))
 	}
 }
 
 // Tracef print formatted trace message to output if debug output enabled
 func (l *Logger) Tracef(format string, v ...interface{}) {
-	if l.logLevel == 0 {
+	if atomic.LoadInt32(&l.logLevel) == 0 {
 		l.Output(1, TracePrefix, fmt.Sprintf(format, v...))
 	}
 }

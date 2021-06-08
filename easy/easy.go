@@ -1,19 +1,18 @@
 package easy
 
 import (
+	"encoding/json"
 	"flag"
-	"fmt"
+	"net"
+	"strconv"
 
 	"github.com/p4gefau1t/trojan-go/common"
-	"github.com/p4gefau1t/trojan-go/conf"
 	"github.com/p4gefau1t/trojan-go/log"
+	"github.com/p4gefau1t/trojan-go/option"
 	"github.com/p4gefau1t/trojan-go/proxy"
-	"v2ray.com/core/common/net"
 )
 
-type EasyOption struct {
-	common.OptionHandler
-
+type easy struct {
 	server   *bool
 	client   *bool
 	password *string
@@ -23,11 +22,36 @@ type EasyOption struct {
 	key      *string
 }
 
-func (o *EasyOption) Name() string {
+type ClientConfig struct {
+	RunType    string   `json:"run_type"`
+	LocalAddr  string   `json:"local_addr"`
+	LocalPort  int      `json:"local_port"`
+	RemoteAddr string   `json:"remote_addr"`
+	RemotePort int      `json:"remote_port"`
+	Password   []string `json:"password"`
+}
+
+type TLS struct {
+	SNI  string `json:"sni"`
+	Cert string `json:"cert"`
+	Key  string `json:"key"`
+}
+
+type ServerConfig struct {
+	RunType    string   `json:"run_type"`
+	LocalAddr  string   `json:"local_addr"`
+	LocalPort  int      `json:"local_port"`
+	RemoteAddr string   `json:"remote_addr"`
+	RemotePort int      `json:"remote_port"`
+	Password   []string `json:"password"`
+	TLS        `json:"ssl"`
+}
+
+func (o *easy) Name() string {
 	return "easy"
 }
 
-func (o *EasyOption) Handle() error {
+func (o *easy) Handle() error {
 	if !*o.server && !*o.client {
 		return common.NewError("empty")
 	}
@@ -36,62 +60,48 @@ func (o *EasyOption) Handle() error {
 	}
 	log.Info("easy mode enabled, trojan-go will NOT use the config file")
 	if *o.client {
-		clientConfigFormat := `
-{
-    "run_type": "client",
-    "local_addr": "%s",
-    "local_port": %s,
-    "remote_addr": "%s",
-    "remote_port": %s,
-    "password": [
-        "%s"
-    ]
-}
-		`
 		if *o.local == "" {
 			log.Warn("client local addr is unspecified, using 127.0.0.1:1080")
 			*o.local = "127.0.0.1:1080"
 		}
-		localHost, localPort, err := net.SplitHostPort(*o.local)
+		localHost, localPortStr, err := net.SplitHostPort(*o.local)
 		if err != nil {
 			log.Fatal(common.NewError("invalid local addr format:" + *o.local).Base(err))
 		}
-		remoteHost, remotePort, err := net.SplitHostPort(*o.remote)
+		remoteHost, remotePortStr, err := net.SplitHostPort(*o.remote)
 		if err != nil {
 			log.Fatal(common.NewError("invalid remote addr format:" + *o.remote).Base(err))
 		}
-		clientConfigJSON := fmt.Sprintf(clientConfigFormat, localHost, localPort, remoteHost, remotePort, *o.password)
-		log.Info("generated config:")
-		log.Info(clientConfigJSON)
-		config, err := conf.ParseJSON([]byte(clientConfigJSON))
-		if err != nil {
-			log.Fatal(config)
-		}
-		client, err := proxy.NewProxy(config)
-		if err != nil {
-			log.Fatal(config)
-		}
-		err = client.Run()
+		localPort, err := strconv.Atoi(localPortStr)
 		if err != nil {
 			log.Fatal(err)
 		}
+		remotePort, err := strconv.Atoi(remotePortStr)
+		if err != nil {
+			log.Fatal(err)
+		}
+		clientConfig := ClientConfig{
+			RunType:    "client",
+			LocalAddr:  localHost,
+			LocalPort:  localPort,
+			RemoteAddr: remoteHost,
+			RemotePort: remotePort,
+			Password: []string{
+				*o.password,
+			},
+		}
+		clientConfigJSON, err := json.Marshal(&clientConfig)
+		common.Must(err)
+		log.Info("generated config:")
+		log.Info(string(clientConfigJSON))
+		proxy, err := proxy.NewProxyFromConfigData(clientConfigJSON, true)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := proxy.Run(); err != nil {
+			log.Fatal(err)
+		}
 	} else if *o.server {
-		serverConfigFormat := `
-{
-    "run_type": "server",
-    "local_addr": "%s",
-    "local_port": %s,
-    "remote_addr": "%s",
-    "remote_port": %s,
-    "password": [
-        "%s"
-    ],
-    "ssl": {
-        "cert": "%s",
-        "key": "%s"
-    }
-}
-		`
 		if *o.remote == "" {
 			log.Warn("server remote addr is unspecified, using 127.0.0.1:80")
 			*o.remote = "127.0.0.1:80"
@@ -100,44 +110,62 @@ func (o *EasyOption) Handle() error {
 			log.Warn("server local addr is unspecified, using 0.0.0.0:443")
 			*o.local = "0.0.0.0:443"
 		}
-		localHost, localPort, err := net.SplitHostPort(*o.local)
+		localHost, localPortStr, err := net.SplitHostPort(*o.local)
 		if err != nil {
 			log.Fatal(common.NewError("invalid local addr format:" + *o.local).Base(err))
 		}
-		remoteHost, remotePort, err := net.SplitHostPort(*o.remote)
+		remoteHost, remotePortStr, err := net.SplitHostPort(*o.remote)
 		if err != nil {
 			log.Fatal(common.NewError("invalid remote addr format:" + *o.remote).Base(err))
 		}
-		serverConfigJSON := fmt.Sprintf(serverConfigFormat, localHost, localPort, remoteHost, remotePort, *o.password, *o.cert, *o.key)
-		log.Info("generated config:")
-		log.Info(serverConfigJSON)
-		config, err := conf.ParseJSON([]byte(serverConfigJSON))
+		localPort, err := strconv.Atoi(localPortStr)
 		if err != nil {
 			log.Fatal(err)
 		}
-		server, err := proxy.NewProxy(config)
+		remotePort, err := strconv.Atoi(remotePortStr)
 		if err != nil {
 			log.Fatal(err)
 		}
-		err = server.Run()
+		serverConfig := ServerConfig{
+			RunType:    "server",
+			LocalAddr:  localHost,
+			LocalPort:  localPort,
+			RemoteAddr: remoteHost,
+			RemotePort: remotePort,
+			Password: []string{
+				*o.password,
+			},
+			TLS: TLS{
+				Cert: *o.cert,
+				Key:  *o.key,
+			},
+		}
+		serverConfigJSON, err := json.Marshal(&serverConfig)
+		common.Must(err)
+		log.Info("generated json config:")
+		log.Info(string(serverConfigJSON))
+		proxy, err := proxy.NewProxyFromConfigData(serverConfigJSON, true)
 		if err != nil {
+			log.Fatal(err)
+		}
+		if err := proxy.Run(); err != nil {
 			log.Fatal(err)
 		}
 	}
 	return nil
 }
 
-func (o *EasyOption) Priority() int {
+func (o *easy) Priority() int {
 	return 50
 }
 
 func init() {
-	common.RegisterOptionHandler(&EasyOption{
+	option.RegisterHandler(&easy{
 		server:   flag.Bool("server", false, "Run a trojan-go server"),
 		client:   flag.Bool("client", false, "Run a trojan-go client"),
 		password: flag.String("password", "", "Password for authentication"),
-		remote:   flag.String("remote", "", "Remote address, for example 127.0.0.1:12345"),
-		local:    flag.String("local", "", "Local address, for example 127.0.0.1:12345"),
+		remote:   flag.String("remote", "", "Remote address, e.g. 127.0.0.1:12345"),
+		local:    flag.String("local", "", "Local address, e.g. 127.0.0.1:12345"),
 		key:      flag.String("key", "server.key", "Key of the server"),
 		cert:     flag.String("cert", "server.crt", "Certificates of the server"),
 	})
